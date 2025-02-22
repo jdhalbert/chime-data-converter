@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>JSON to CSV Converter for Chime</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        textarea {
+            width: 100%;
+            height: 200px;
+            resize: vertical;
+            font-family: monospace;
+        }
+        button {
+            padding: 10px 20px;
+            margin-top: 10px;
+        }
+        #error {
+            margin-top: 10px;
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Chime Transaction Data JSON to CSV Converter</h1>
+    <p>To get Chime JSON data, go to <a href="https://chime.com" target="_blank" rel="noopener noreferrer">chime.com</a>, press F12, and log in. In the Network->Fetch/XHR tab, find the "graphql" response that contains JSON-formatted transaction data. Copy and paste the entire transaction data into this box.</p>
+    <p>Processing is done client-side. No data leaves your machine.</p>
+    <textarea id="json-input" placeholder="Paste your JSON here..."></textarea><br>
+    <button onclick="convertToCSV()">Convert to CSV</button>
+    <div id="error"></div>
+
+    <script>
+        function convertToCSV() {
+            const jsonInput = document.getElementById('json-input').value;
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = '';  // Clear previous errors
+
+            try {
+                const data = JSON.parse(jsonInput);
+                const sections = data.data.transaction_feed.sections;
+                const allTransactions = sections.flatMap(section => section.transactions);
+                const sortedTransactions = allTransactions.sort((a, b) => new Date(a.transacted_at) - new Date(b.transacted_at));
+
+                // Generate CSV content
+                const csvContent = generateCSV(sortedTransactions);
+                downloadCSV(csvContent);
+            } catch (error) {
+                errorDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function generateCSV(transactions) {
+            const headers = ['Date', 'Amount', 'Payee', 'Category', 'Memo'];
+            const rows = transactions.map(t => {
+                const date = new Date(t.transacted_at).toISOString().replace('T', ' ').replace('Z', '');
+                const amount = t.amount;
+                const payee = t.description;
+                const category = t.category;
+                const memo = `${t.description_2} - ${t.description_3}`;
+                return [date, amount, payee, category, memo].map(field => `"${field}"`).join(',');
+            });
+            return [headers.join(','), ...rows].join('\n');
+        }
+
+        function downloadCSV(csvContent) {
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'transactions.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>

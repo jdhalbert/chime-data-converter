@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>JSON to CSV Converter for Chime</title>
+    <title>JSON to CSV Converter for Chime & Marcus</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -27,8 +27,10 @@
     </style>
 </head>
 <body>
-    <h1>Chime Transaction Data JSON to CSV Converter</h1>
-    <p>To get Chime JSON data, go to <a href="https://chime.com" target="_blank" rel="noopener noreferrer">chime.com</a>, press F12, and log in. In the Network->Fetch/XHR tab, find the "graphql" response that contains JSON-formatted transaction data. Copy and paste the entire transaction data into this box.</p>
+    <h1>Chime & Marcus Transaction Data JSON to CSV Converter</h1>
+    <p>To get <strong>Chime</strong> JSON data, go to <a href="https://chime.com" target="_blank" rel="noopener noreferrer">chime.com</a>, press F12, and log in. In the Network->Fetch/XHR tab, find the "graphql" response that contains JSON-formatted transaction data.</p>
+    <p>To get <strong>Marcus</strong> JSON data, go to <a href="https://marcus.com" target="_blank" rel="noopener noreferrer">marcus.com</a>, press F12, and load the page with transaction detail. In the Network->Fetch/XHR tab, find the response called "cos/?operations=Transations".</p>
+    <p>Copy and paste the entire transaction data from either service into the box below.</p>
     <p>Processing is done client-side. No data leaves your machine.</p>
     <textarea id="json-input" placeholder="Paste your JSON here..."></textarea><br>
     <button onclick="convertToCSV()">Convert to CSV</button>
@@ -42,9 +44,32 @@
 
             try {
                 const data = JSON.parse(jsonInput);
-                const sections = data.data.transaction_feed.sections;
-                const allTransactions = sections.flatMap(section => section.transactions);
-                const sortedTransactions = allTransactions.sort((a, b) => new Date(a.transacted_at) - new Date(b.transacted_at));
+                let transactions = [];
+
+                if (data.data && data.data.transaction_feed && data.data.transaction_feed.sections) {
+                    // Chime format
+                    const sections = data.data.transaction_feed.sections;
+                    transactions = sections.flatMap(section => section.transactions).map(t => ({
+                        dateRaw: t.transacted_at,
+                        amount: t.amount,
+                        payee: t.description,
+                        category: t.category,
+                        memo: `${t.description_2} - ${t.description_3}`
+                    }));
+                } else if (data.data && data.data.transactions) {
+                    // Marcus format
+                    transactions = data.data.transactions.map(t => ({
+                        dateRaw: t.date,
+                        amount: t.amount,
+                        payee: t.description,
+                        category: t.category,
+                        memo: t.formattedDescription
+                    }));
+                } else {
+                    throw new Error("Unknown JSON format. Please provide valid Chime or Marcus transaction data.");
+                }
+
+                const sortedTransactions = transactions.sort((a, b) => new Date(a.dateRaw) - new Date(b.dateRaw));
 
                 // Generate CSV content
                 const csvContent = generateCSV(sortedTransactions);
@@ -57,11 +82,11 @@
         function generateCSV(transactions) {
             const headers = ['Date', 'Amount', 'Payee', 'Category', 'Memo'];
             const rows = transactions.map(t => {
-                const date = new Date(t.transacted_at).toISOString().replace('T', ' ').replace('Z', '');
+                const date = new Date(t.dateRaw).toISOString().replace('T', ' ').replace('Z', '');
                 const amount = t.amount;
-                const payee = t.description;
+                const payee = t.payee;
                 const category = t.category;
-                const memo = `${t.description_2} - ${t.description_3}`;
+                const memo = t.memo;
                 return [date, amount, payee, category, memo].map(field => `"${field}"`).join(',');
             });
             return [headers.join(','), ...rows].join('\n');

@@ -2,98 +2,297 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>JSON to CSV Converter for Chime & Marcus</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>JSON to CSV Converter for Chime, Marcus &amp; X Money</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             max-width: 800px;
             margin: 20px auto;
             padding: 20px;
+            line-height: 1.45;
+            color: #222;
         }
         textarea {
             width: 100%;
-            height: 200px;
+            height: 220px;
             resize: vertical;
             font-family: monospace;
+            box-sizing: border-box;
         }
         button {
             padding: 10px 20px;
             margin-top: 10px;
+            cursor: pointer;
         }
         #error {
             margin-top: 10px;
-            color: red;
+            color: #b00020;
+        }
+        #status {
+            margin-top: 10px;
+            color: #0b6b2f;
+        }
+        code {
+            background: #f3f3f3;
+            padding: 1px 4px;
+        }
+        ol {
+            padding-left: 1.3em;
         }
     </style>
 </head>
 <body>
-    <h1>Chime & Marcus Transaction Data JSON to CSV Converter</h1>
-    <p>To get <strong>Chime</strong> JSON data, go to <a href="https://chime.com" target="_blank" rel="noopener noreferrer">chime.com</a>, press F12, and log in. In the Network->Fetch/XHR tab, find the "graphql" response that contains JSON-formatted transaction data.</p>
-    <p>To get <strong>Marcus</strong> JSON data, go to <a href="https://marcus.com" target="_blank" rel="noopener noreferrer">marcus.com</a>, press F12, and load the page with transaction detail. In the Network->Fetch/XHR tab, find the response called "cos/?operations=Transations".</p>
-    <p>Copy and paste the entire transaction data from either service into the box below.</p>
-    <p>Processing is done client-side. No data leaves your machine.</p>
+    <h1>Chime, Marcus &amp; X Money Transaction JSON to CSV Converter</h1>
+
+    <p>Paste a full transaction JSON payload from any of the supported sources. Processing is done in your browser. No data leaves your machine.</p>
+
+    <p><strong>Chime:</strong> Go to <a href="https://chime.com" target="_blank" rel="noopener noreferrer">chime.com</a>, press F12, and log in. In the Network → Fetch/XHR tab, find the <code>graphql</code> response that contains JSON-formatted transaction data.</p>
+
+    <p><strong>Marcus:</strong> Go to <a href="https://marcus.com" target="_blank" rel="noopener noreferrer">marcus.com</a>, press F12, and load the page with transaction detail. In the Network → Fetch/XHR tab, find the response called <code>cos/?operations=Transations</code>.</p>
+
+    <p><strong>X Money:</strong> Go to <a href="https://x.com/i/money" target="_blank" rel="noopener noreferrer">x.com/i/money</a> (or the Money tab in the X app web view), press F12, and open Network → Fetch/XHR. Find a GraphQL response whose JSON contains <code>data.get_transactions.items</code> and copy the entire response body.</p>
+
+    <p>Copy and paste the entire transaction data into the box below.</p>
+
     <textarea id="json-input" placeholder="Paste your JSON here..."></textarea><br>
     <button onclick="convertToCSV()">Convert to CSV</button>
     <div id="error"></div>
+    <div id="status"></div>
 
     <script>
         function convertToCSV() {
             const jsonInput = document.getElementById('json-input').value;
             const errorDiv = document.getElementById('error');
-            errorDiv.textContent = '';  // Clear previous errors
+            const statusDiv = document.getElementById('status');
+            errorDiv.textContent = '';
+            statusDiv.textContent = '';
 
             try {
                 const data = JSON.parse(jsonInput);
-                let transactions = [];
+                const { transactions, source } = extractTransactions(data);
 
-                if (data.data && data.data.transaction_feed && data.data.transaction_feed.sections) {
-                    // Chime format
-                    const sections = data.data.transaction_feed.sections;
-                    transactions = sections.flatMap(section => section.transactions).map(t => ({
-                        dateRaw: t.transacted_at,
-                        amount: t.amount,
-                        payee: t.description,
-                        category: t.category,
-                        memo: `${t.description_2} - ${t.description_3}`
-                    }));
-                } else if (data.data && data.data.transactions) {
-                    // Marcus format
-                    transactions = data.data.transactions.map(t => ({
-                        dateRaw: t.date,
-                        amount: t.amount,
-                        payee: t.description,
-                        category: t.category,
-                        memo: t.formattedDescription
-                    }));
-                } else {
-                    throw new Error("Unknown JSON format. Please provide valid Chime or Marcus transaction data.");
+                if (!transactions.length) {
+                    throw new Error("No transactions were found in the JSON.");
                 }
 
-                const sortedTransactions = transactions.sort((a, b) => new Date(a.dateRaw) - new Date(b.dateRaw));
-
-                // Generate CSV content
+                const sortedTransactions = transactions.sort((a, b) => parseDate(a.dateRaw) - parseDate(b.dateRaw));
                 const csvContent = generateCSV(sortedTransactions);
                 downloadCSV(csvContent);
+                statusDiv.textContent = `Exported ${sortedTransactions.length} ${source} transaction${sortedTransactions.length === 1 ? '' : 's'} to transactions.csv`;
             } catch (error) {
                 errorDiv.textContent = `Error: ${error.message}`;
             }
         }
 
+        function extractTransactions(data) {
+            if (data && data.data && data.data.transaction_feed && Array.isArray(data.data.transaction_feed.sections)) {
+                const sections = data.data.transaction_feed.sections;
+                const transactions = sections.flatMap(section => section.transactions || []).map(t => ({
+                    dateRaw: t.transacted_at,
+                    amount: t.amount,
+                    payee: t.description,
+                    category: t.category,
+                    memo: `${t.description_2 || ''} - ${t.description_3 || ''}`.replace(/^\s-\s|\s-\s$/g, '').trim()
+                }));
+                return { transactions, source: 'Chime' };
+            }
+
+            if (data && data.data && Array.isArray(data.data.transactions)) {
+                const transactions = data.data.transactions.map(t => ({
+                    dateRaw: t.date,
+                    amount: t.amount,
+                    payee: t.description,
+                    category: t.category,
+                    memo: t.formattedDescription
+                }));
+                return { transactions, source: 'Marcus' };
+            }
+
+            const xItems = getXMoneyItems(data);
+            if (xItems) {
+                return {
+                    transactions: xItems.map(mapXMoneyTransaction),
+                    source: 'X Money'
+                };
+            }
+
+            throw new Error("Unknown JSON format. Please provide valid Chime, Marcus, or X Money transaction data.");
+        }
+
+        function getXMoneyItems(data) {
+            if (!data || typeof data !== 'object') return null;
+
+            const candidates = [
+                data.data && data.data.get_transactions && data.data.get_transactions.items,
+                data.get_transactions && data.get_transactions.items,
+                data.items
+            ];
+
+            for (const items of candidates) {
+                if (Array.isArray(items) && items.length && items.some(isXMoneyTransaction)) {
+                    return items;
+                }
+            }
+            return null;
+        }
+
+        function isXMoneyTransaction(item) {
+            if (!item || typeof item !== 'object') return false;
+            return item.__typename === 'XPaymentsTransaction'
+                || item.amount_local_micro != null
+                || (item.presentation && (item.presentation.timestamp || item.presentation.title));
+        }
+
+        function mapXMoneyTransaction(t) {
+            const presentation = t.presentation || {};
+            const entity = unwrapEntity(presentation.entity_results);
+            const details = t.details || {};
+            const direction = presentation.amount_direction || '';
+            const amount = microToAmount(t.amount_local_micro ?? presentation.amount?.local_micro, direction);
+            const cashback = microToNumber(presentation.cashback_amount?.local_micro);
+            const counterpart = getXMoneyCounterpart(t, details, entity, presentation);
+            const location = formatLocation(entity && entity.location);
+            const note = cleanQuotes(presentation.amount_description || presentation.subtitle);
+            const memoParts = [
+                t.transaction_type,
+                t.transaction_status || presentation.amount_style,
+                note && note !== presentation.title ? note : '',
+                cashback ? `cashback ${formatMoney(cashback)}` : '',
+                counterpart && counterpart !== presentation.title ? counterpart : '',
+                location
+            ].filter(Boolean);
+
+            return {
+                dateRaw: presentation.timestamp || t.timestamp,
+                amount: formatMoney(amount),
+                payee: presentation.title || (entity && entity.name) || counterpart || t.transaction_type || '',
+                category: humanizeCategory((entity && entity.finance_category) || t.transaction_type || presentation.subtitle || ''),
+                memo: memoParts.join(' | ')
+            };
+        }
+
+        function unwrapEntity(entityResults) {
+            if (!entityResults || typeof entityResults !== 'object') return null;
+            if (entityResults.__typename === 'UserResults' || entityResults.result) {
+                const core = entityResults.result && entityResults.result.core;
+                return {
+                    name: (core && (core.name || core.screen_name)) || null,
+                    finance_category: entityResults.finance_category || null,
+                    location: entityResults.location || null
+                };
+            }
+            return entityResults;
+        }
+
+        function getXMoneyCounterpart(t, details, entity, presentation) {
+            const receiver = details.receiver_results && details.receiver_results.result && details.receiver_results.result.core;
+            const sender = details.sender_results && details.sender_results.result && details.sender_results.result.core;
+            if (receiver || sender) {
+                const from = formatPerson(sender);
+                const to = formatPerson(receiver);
+                if (from && to && from !== to) return `${from} → ${to}`;
+                return to || from || '';
+            }
+            if (entity && entity.name) return entity.name;
+            return presentation.title || '';
+        }
+
+        function formatPerson(core) {
+            if (!core) return '';
+            if (core.name && core.screen_name) return `${core.name} (@${core.screen_name})`;
+            return core.name || (core.screen_name ? `@${core.screen_name}` : '');
+        }
+
+        function formatLocation(location) {
+            const address = location && location.address ? location.address : location;
+            if (!address || typeof address !== 'object') return '';
+            const parts = [address.street, address.city, address.region, address.postal_code]
+                .map(part => (part || '').toString().trim())
+                .filter(part => part && !/^\d{3}-\d{3}-\d{4}$/.test(part));
+            return parts.join(', ');
+        }
+
+        function microToNumber(micro) {
+            if (micro == null || micro === '') return 0;
+            const n = Number(micro);
+            if (!Number.isFinite(n)) return 0;
+            return n / 1_000_000;
+        }
+
+        function microToAmount(micro, direction) {
+            const value = microToNumber(micro);
+            const dir = String(direction || '').toLowerCase();
+            if (dir === 'debit') return -Math.abs(value);
+            if (dir === 'credit') return Math.abs(value);
+            return value;
+        }
+
+        function formatMoney(n) {
+            if (!Number.isFinite(Number(n))) return n;
+            return Number(n).toFixed(2);
+        }
+
+        function humanizeCategory(value) {
+            if (!value) return '';
+            const cleaned = String(value).replace(/^["“]|["”]$/g, '');
+            if (cleaned === cleaned.toUpperCase() && cleaned.includes('_')) {
+                return cleaned.toLowerCase().split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+            }
+            return cleaned;
+        }
+
+        function cleanQuotes(value) {
+            if (value == null) return '';
+            return String(value).replace(/^[“"]|[”"]$/g, '').trim();
+        }
+
+        function parseDate(raw) {
+            if (raw == null || raw === '') return new Date(NaN);
+            if (raw instanceof Date) return raw;
+            if (typeof raw === 'number') {
+                return new Date(raw > 1e12 ? raw : raw * 1000);
+            }
+            const text = String(raw).trim();
+            if (/^\d+$/.test(text)) {
+                const n = Number(text);
+                return new Date(n > 1e12 ? n : n * 1000);
+            }
+            return new Date(text);
+        }
+
+        function formatDate(raw) {
+            const date = parseDate(raw);
+            if (Number.isNaN(date.getTime())) {
+                const text = String(raw || '');
+                const dateOnly = text.match(/\d{4}-\d{2}-\d{2}/);
+                return dateOnly ? dateOnly[0] : text.slice(0, 10);
+            }
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function csvEscape(field) {
+            const text = field == null ? '' : String(field);
+            return `"${text.replace(/"/g, '""')}"`;
+        }
+
         function generateCSV(transactions) {
             const headers = ['Date', 'Amount', 'Payee', 'Category', 'Memo'];
-            const rows = transactions.map(t => {
-                const date = new Date(t.dateRaw).toISOString().replace('T', ' ').replace('Z', '');
-                const amount = t.amount;
-                const payee = t.payee;
-                const category = t.category;
-                const memo = t.memo;
-                return [date, amount, payee, category, memo].map(field => `"${field}"`).join(',');
-            });
+            const rows = transactions.map(t => [
+                formatDate(t.dateRaw),
+                t.amount,
+                t.payee,
+                t.category,
+                t.memo
+            ].map(csvEscape).join(','));
             return [headers.join(','), ...rows].join('\n');
         }
 
         function downloadCSV(csvContent) {
-            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;

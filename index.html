@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>JSON to CSV Converter for Chime, Marcus &amp; X Money</title>
+    <title>Transaction JSON/HTML to CSV Converter for Chime, Marcus & X Money</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -40,40 +40,93 @@
         ol {
             padding-left: 1.3em;
         }
+        .file-input {
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
-    <h1>Chime, Marcus &amp; X Money Transaction JSON to CSV Converter</h1>
+    <h1>Chime, Marcus & X Money Transaction to CSV Converter</h1>
 
-    <p>Paste a full transaction JSON payload from any of the supported sources. Processing is done in your browser. No data leaves your machine.</p>
+    <p>Paste a full transaction JSON payload, or upload/paste a saved HTML page from X Money. Processing is done in your browser. No data leaves your machine.</p>
 
     <p><strong>Chime:</strong> Go to <a href="https://chime.com" target="_blank" rel="noopener noreferrer">chime.com</a>, press F12, and log in. In the Network → Fetch/XHR tab, find the <code>graphql</code> response that contains JSON-formatted transaction data.</p>
 
     <p><strong>Marcus:</strong> Go to <a href="https://marcus.com" target="_blank" rel="noopener noreferrer">marcus.com</a>, press F12, and load the page with transaction detail. In the Network → Fetch/XHR tab, find the response called <code>cos/?operations=Transations</code>.</p>
 
-    <p><strong>X Money:</strong> Go to <a href="https://x.com/i/money" target="_blank" rel="noopener noreferrer">x.com/i/money</a> (or the Money tab in the X app web view), press F12, and open Network → Fetch/XHR. Find a GraphQL response whose JSON contains <code>data.get_transactions.items</code> and copy the entire response body.</p>
+    <p><strong>X Money (JSON):</strong> Go to <a href="https://x.com/i/money" target="_blank" rel="noopener noreferrer">x.com/i/money</a> (or the Money tab in the X app web view), press F12, and open Network → Fetch/XHR. Find a GraphQL response whose JSON contains <code>data.get_transactions.items</code> and copy the entire response body.</p>
 
-    <p>Copy and paste the entire transaction data into the box below.</p>
+    <p><strong>X Money (HTML):</strong> On the X Money transactions page, save the page as HTML (Complete) via your browser's Save Page As, or copy the full page source. Then upload the .html file below or paste its contents into the text box. The tool extracts the visible transaction list (dates, payees, amounts, notes).</p>
 
-    <textarea id="json-input" placeholder="Paste your JSON here..."></textarea><br>
+    <p>Copy and paste the entire transaction data into the box below, or upload an HTML file:</p>
+
+    <div class="file-input">
+        <label for="file-input">Upload HTML or JSON file (optional): </label>
+        <input type="file" id="file-input" accept=".html,.htm,.json,text/html,application/json">
+    </div>
+
+    <textarea id="json-input" placeholder="Paste your JSON or HTML here..."></textarea><br>
     <button onclick="convertToCSV()">Convert to CSV</button>
     <div id="error"></div>
     <div id="status"></div>
 
     <script>
         function convertToCSV() {
-            const jsonInput = document.getElementById('json-input').value;
             const errorDiv = document.getElementById('error');
             const statusDiv = document.getElementById('status');
             errorDiv.textContent = '';
             statusDiv.textContent = '';
 
-            try {
-                const data = JSON.parse(jsonInput);
-                const { transactions, source } = extractTransactions(data);
+            const fileInput = document.getElementById('file-input');
+            const textInput = document.getElementById('json-input').value.trim();
 
-                if (!transactions.length) {
-                    throw new Error("No transactions were found in the JSON.");
+            if (fileInput.files && fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    processInput(e.target.result);
+                };
+                reader.onerror = function() {
+                    errorDiv.textContent = 'Error reading the file.';
+                };
+                reader.readAsText(file);
+                return;
+            }
+
+            if (!textInput) {
+                errorDiv.textContent = 'Please paste data or select a file.';
+                return;
+            }
+
+            processInput(textInput);
+        }
+
+        function processInput(input) {
+            const errorDiv = document.getElementById('error');
+            const statusDiv = document.getElementById('status');
+
+            try {
+                let transactions, source;
+
+                // Try JSON first
+                try {
+                    const data = JSON.parse(input);
+                    const result = extractTransactions(data);
+                    transactions = result.transactions;
+                    source = result.source;
+                } catch (jsonError) {
+                    // Not valid JSON — try as HTML (X Money page)
+                    if (input.includes('<') && (input.includes('transactions-day-') || input.toLowerCase().includes('<html'))) {
+                        const result = extractFromHTML(input);
+                        transactions = result.transactions;
+                        source = result.source;
+                    } else {
+                        throw new Error('Input is neither valid JSON nor a recognizable X Money HTML page.');
+                    }
+                }
+
+                if (!transactions || !transactions.length) {
+                    throw new Error("No transactions were found.");
                 }
 
                 const sortedTransactions = transactions.sort((a, b) => parseDate(a.dateRaw) - parseDate(b.dateRaw));
@@ -118,6 +171,139 @@
             }
 
             throw new Error("Unknown JSON format. Please provide valid Chime, Marcus, or X Money transaction data.");
+        }
+
+        function extractFromHTML(html) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            let transactions = [];
+
+            const dayHeads = doc.querySelectorAll('h2[id^="transactions-day-"], [id^="transactions-day-"]');
+            if (dayHeads.length > 0) {
+                dayHeads.forEach(h2 => {
+                    const id = h2.id || '';
+                    const tsMatch = id.match(/transactions-day-(\d+)/);
+                    const dateRaw = tsMatch ? Number(tsMatch[1]) : (h2.textContent || '').trim();
+
+                    let ul = h2.nextElementSibling;
+                    while (ul && ul.tagName !== 'UL') {
+                        ul = ul.nextElementSibling;
+                    }
+                    if (!ul) return;
+
+                    const items = ul.querySelectorAll('a[href*="/money/transactions/"]');
+                    items.forEach(a => {
+                        const payeeEl = a.querySelector('[class*="font-medium"][class*="text-primary"]') ||
+                                         a.querySelector('div.truncate');
+                        const payee = payeeEl ? payeeEl.textContent.trim() : '';
+
+                        let amountText = '';
+                        let isCredit = false;
+                        const candidates = a.querySelectorAll('[class*="text-body"][class*="font-normal"], [class*="text-success"]');
+                        for (const el of candidates) {
+                            const txt = (el.textContent || '').trim();
+                            if (/\$/.test(txt)) {
+                                amountText = txt;
+                                isCredit = txt.includes('+') || (el.className && String(el.className).includes('success'));
+                                break;
+                            }
+                        }
+
+                        const memoEl = a.querySelector('[class*="text-subtext2"]');
+                        let memo = memoEl ? memoEl.textContent.trim() : '';
+                        memo = memo.replace(/^[“"']|[”"']$/g, '').trim();
+
+                        const amount = formatAmountFromText(amountText, isCredit);
+
+                        if (payee || amountText) {
+                            transactions.push({
+                                dateRaw: dateRaw,
+                                amount: amount,
+                                payee: payee,
+                                category: '',
+                                memo: memo
+                            });
+                        }
+                    });
+                });
+            }
+
+            // Fallback: regex extraction from raw HTML (handles complex saved pages where DOMParser misses elements)
+            if (!transactions.length) {
+                transactions = extractTransactionsFromRawHTML(html);
+            }
+
+            if (!transactions.length) {
+                throw new Error('No transaction day sections found in the HTML. Make sure it is a saved X Money transactions page.');
+            }
+
+            return { transactions, source: 'X Money HTML' };
+        }
+
+        function extractTransactionsFromRawHTML(html) {
+            const transactions = [];
+            // Match day headers: id="transactions-day-TIMESTAMP">TEXT</h2> followed by <ul ...>
+            const dayRegex = /id="transactions-day-(\d+)"[^>]*>([^<]*)<\/h2>\s*<ul[^>]*>([\s\S]*?)<\/ul>/gi;
+            let dayMatch;
+            while ((dayMatch = dayRegex.exec(html)) !== null) {
+                const dateRaw = Number(dayMatch[1]);
+                const ulContent = dayMatch[3];
+
+                // Match individual transaction <a href=".../transactions/ID">...</a>
+                const txRegex = /<a[^>]*href="[^"]*\/money\/transactions\/[^"]+"[^>]*>([\s\S]*?)<\/a>/gi;
+                let txMatch;
+                while ((txMatch = txRegex.exec(ulContent)) !== null) {
+                    const inner = txMatch[1];
+
+                    // Extract payee from the font-medium text-primary truncate div
+                    const payeeMatch = inner.match(/<div[^>]*class="[^"]*font-medium[^"]*text-primary[^"]*truncate[^"]*"[^>]*>([^<]+)<\/div>/i) ||
+                                       inner.match(/<div[^>]*class="[^"]*truncate[^"]*"[^>]*>([^<]+)<\/div>/i);
+                    const payee = payeeMatch ? payeeMatch[1].trim() : '';
+
+                    // Extract amount (look for $ in a div)
+                    const amountMatch = inner.match(/<div[^>]*class="[^"]*(?:text-body|text-success)[^"]*"[^>]*>([^<]*\$[^<]*)<\/div>/i);
+                    const amountText = amountMatch ? amountMatch[1].trim() : '';
+                    const isCredit = amountText.includes('+') || (amountMatch && amountMatch[0].includes('success'));
+
+                    // Extract memo from text-subtext2
+                    const memoMatch = inner.match(/<div[^>]*class="[^"]*text-subtext2[^"]*"[^>]*>([^<]+)<\/div>/i);
+                    let memo = memoMatch ? memoMatch[1].trim() : '';
+                    memo = memo.replace(/^[“"']|[”"']$/g, '').trim();
+
+                    const amount = formatAmountFromText(amountText, isCredit);
+
+                    if (payee || amountText) {
+                        transactions.push({
+                            dateRaw: dateRaw,
+                            amount: amount,
+                            payee: payee,
+                            category: '',
+                            memo: memo
+                        });
+                    }
+                }
+            }
+            return transactions;
+        }
+
+        function formatAmountFromText(text, isCredit) {
+            if (!text) return '0.00';
+            // Extract numeric value, handle commas
+            const cleaned = text.replace(/[^0-9.-]/g, '');
+            let num = parseFloat(cleaned);
+            if (!Number.isFinite(num)) return '0.00';
+            num = Math.abs(num);
+
+            const hasMinus = /[-−]/.test(text);
+            if (hasMinus) {
+                num = -num;
+            } else if (!isCredit) {
+                // No + and not success style → treat as debit (outgoing)
+                num = -num;
+            }
+            // else credit → positive
+
+            return num.toFixed(2);
         }
 
         function getXMoneyItems(data) {
